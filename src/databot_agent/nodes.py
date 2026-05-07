@@ -51,7 +51,7 @@ def make_write_scripts_node(llm_with_tools):
             state_update = {}
 
         response = await llm_with_tools.ainvoke(messages)
-        new_msgs = ([new_message, response] if new_message else [response])
+        new_msgs = [new_message, response] if new_message else [response]
         return {**state_update, "messages": new_msgs}
 
     return write_scripts_node
@@ -59,22 +59,39 @@ def make_write_scripts_node(llm_with_tools):
 
 def make_human_review_node(workdir: str):
     async def human_review_node(state: AgentState) -> dict:
-        decision = interrupt({
-            "message": "The agent has written train.py and eval.py. Review them before execution.",
-            "workdir": workdir,
-        })
-        feedback = decision.get("feedback", "") if not decision.get("approved", True) else ""
+        decision = interrupt(
+            {
+                "message": "The agent has written train.py and eval.py. Review them before execution.",
+                "workdir": workdir,
+            }
+        )
+        feedback = (
+            decision.get("feedback", "") if not decision.get("approved", True) else ""
+        )
         return {"pending_feedback": feedback}
 
     return human_review_node
+
+
+def _parse_mcp_result(result) -> dict:
+    """Extract the dict payload from the list[TextContentBlock] that langchain-mcp-adapters returns."""
+    if isinstance(result, list):
+        for block in result:
+            if isinstance(block, dict) and block.get("type") == "text":
+                return json.loads(block["text"])
+    raise ValueError(f"Unexpected MCP tool result format: {type(result)!r}")
 
 
 def make_run_scripts_node(tools: list):
     run_python_file = next(t for t in tools if t.name == "run_python_file")
 
     async def run_scripts_node(state: AgentState) -> dict:
-        train_result = await run_python_file.ainvoke({"path": "train.py"})
-        eval_result = await run_python_file.ainvoke({"path": "eval.py"})
+        train_result = _parse_mcp_result(
+            await run_python_file.ainvoke({"path": "train.py"})
+        )
+        eval_result = _parse_mcp_result(
+            await run_python_file.ainvoke({"path": "eval.py"})
+        )
 
         summary = (
             f"## train.py result (returncode={train_result['returncode']})\n"

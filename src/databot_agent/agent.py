@@ -15,12 +15,16 @@ from .state import AgentState
 def build_llm(provider: str, model: str):
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
+
         return ChatAnthropic(model=model)
     elif provider == "ollama":
         from langchain_ollama import ChatOllama
+
         return ChatOllama(model=model, base_url="http://localhost:11434")
     else:
-        raise ValueError(f"Unknown provider: {provider}. Choose 'anthropic' or 'ollama'.")
+        raise ValueError(
+            f"Unknown provider: {provider}. Choose 'anthropic' or 'ollama'."
+        )
 
 
 def _human_review_router(state: AgentState) -> str:
@@ -37,14 +41,15 @@ def _evaluate_router(state: AgentState, max_iterations: int) -> str:
 
 
 def build_graph(tools: list, llm, max_iterations: int = 3, dataset_dir: str = "."):
-    llm_with_tools = llm.bind_tools(tools)
+    safe_tools = [t for t in tools if t.name != "run_python_file"]
+    llm_with_tools = llm.bind_tools(safe_tools)
 
     explore = make_explore_node(llm_with_tools)
     write_scripts = make_write_scripts_node(llm_with_tools)
     human_review = make_human_review_node(dataset_dir)
     run_scripts = make_run_scripts_node(tools)
     evaluate = make_evaluate_node(llm, max_iterations)
-    tool_executor = ToolNode(tools)
+    tool_executor = ToolNode(safe_tools)
 
     graph = StateGraph(AgentState)
     graph.add_node("explore", explore)
@@ -55,7 +60,9 @@ def build_graph(tools: list, llm, max_iterations: int = 3, dataset_dir: str = ".
     graph.add_node("evaluate", evaluate)
 
     graph.add_edge(START, "explore")
-    graph.add_conditional_edges("explore", tools_condition, {"tools": "tools", END: "write_scripts"})
+    graph.add_conditional_edges(
+        "explore", tools_condition, {"tools": "tools", END: "write_scripts"}
+    )
     graph.add_edge("tools", "explore")
 
     graph.add_conditional_edges(
@@ -64,7 +71,7 @@ def build_graph(tools: list, llm, max_iterations: int = 3, dataset_dir: str = ".
         {"tools": "write_tools", END: "human_review"},
     )
 
-    write_tool_executor = ToolNode(tools)
+    write_tool_executor = ToolNode(safe_tools)
     graph.add_node("write_tools", write_tool_executor)
     graph.add_edge("write_tools", "write_scripts")
 
@@ -81,4 +88,6 @@ def build_graph(tools: list, llm, max_iterations: int = 3, dataset_dir: str = ".
     )
 
     checkpointer = MemorySaver()
-    return graph.compile(checkpointer=checkpointer)
+    compiled = graph.compile(checkpointer=checkpointer)
+    compiled.get_graph().draw_mermaid_png(output_file_path="graph.png")
+    return compiled
